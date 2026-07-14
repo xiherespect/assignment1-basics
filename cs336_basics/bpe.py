@@ -1,11 +1,40 @@
 from __future__ import annotations
 
+import heapq
 import json
+import os
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Iterator
+from multiprocessing import Pool
 from pathlib import Path
 
 import regex
+
+from .pretokenization_example import find_chunk_boundaries
+
+class _RevPair:
+    """Reverses pair comparison so the heap tiebreaks by largest pair, matching max() behavior."""
+
+    __slots__ = ("pair",)
+
+    def __init__(self, pair: tuple[bytes, bytes]) -> None:
+        self.pair = pair
+
+    def __lt__(self, other: "_RevPair") -> bool:
+        return self.pair > other.pair
+
+    def __le__(self, other: "_RevPair") -> bool:
+        return self.pair >= other.pair
+
+    def __eq__(self, other: "_RevPair") -> bool:
+        return self.pair == other.pair
+
+    def __ge__(self, other: "_RevPair") -> bool:
+        return self.pair <= other.pair
+
+    def __gt__(self, other: "_RevPair") -> bool:
+        return self.pair < other.pair
+
 
 PRETOKENIZER_PATTERN = (
     r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
@@ -88,17 +117,60 @@ def countword(
     return counts
 
 
+# 子进程worker：读取文件的某一块并统计（必须放在模块顶层才能被pickle）
+def _count_chunk(
+    args: tuple[str | Path, int, int, list[str] | None],
+) -> Counter[tuple[bytes, ...]]:
+    input_path, start, end, special_tokens = args
+    with open(input_path, "rb") as f:
+        f.seek(start)
+        chunk = f.read(end - start).decode("utf-8", errors="ignore")
+    return countword(chunk, special_tokens)
+
+
+# 并行统计：按 <|endoftext|> 切块，多进程各自统计后合并
+def countword_parallel(
+    input_path: str | Path,
+    special_tokens: list[str] | None = None,
+    num_processes: int | None = None,
+) -> Counter[tuple[bytes, ...]]:
+    if num_processes is None:
+        num_processes = os.cpu_count() or 1
+
+    # 用哪个special token作为切块边界（默认 <|endoftext|>）
+    split_token = special_tokens[0] if special_tokens else "<|endoftext|>"
+    split_token_bytes = split_token.encode("utf-8")
+
+    with open(input_path, "rb") as f:
+        boundaries = find_chunk_boundaries(f, num_processes, split_token_bytes)
+
+    tasks = [
+        (input_path, start, end, special_tokens)
+        for start, end in zip(boundaries[:-1], boundaries[1:])
+    ]
+
+    total: Counter[tuple[bytes, ...]] = Counter()
+    if num_processes <= 1 or len(tasks) <= 1:
+        for task in tasks:
+            total.update(_count_chunk(task))
+        return total
+
+    with Pool(processes=num_processes) as pool:
+        for partial in pool.imap_unordered(_count_chunk, tasks):
+            total.update(partial)
+    return total
+
+
 # 主要训练
 def train_bpe(
     input_path: str | Path,
     vocab_size: int,
     special_tokens: list[str] | None = None,
+    num_processes: int | None = None,
 ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
     special_tokens = _sorted_special_tokens(special_tokens)
-    with open(input_path, encoding="utf-8") as f:
-        corpus = f.read()
-    # 数词
-    word_freq = countword(corpus, special_tokens)
+    # 数词（并行预分词）
+    word_freq = countword_parallel(input_path, special_tokens, num_processes)
     # 初始化
     vocab: dict[int, bytes] = {}
     next_id = 0
@@ -125,30 +197,43 @@ def train_bpe(
             pair_to_word_ids[pair].add(word_id)
 
     merges: list[tuple[bytes, bytes]] = []
+    total_merges = vocab_size - len(vocab)
 
-    while len(vocab) < vocab_size and pair_counts:
-        best_pair, best_count = max(
-            pair_counts.items(), key=lambda item: (item[1], item[0])
-        )
-        if best_count <= 0:
+    # Lazy-deletion max-heap: (-count, _RevPair) so highest count wins,
+    # with largest pair as tiebreak (matching the original max() behavior).
+    heap: list = [(-count, _RevPair(pair)) for pair, count in pair_counts.items()]
+    heapq.heapify(heap)
+
+    while len(vocab) < vocab_size:
+        # Pop stale heap entries until we find one whose count matches pair_counts.
+        best_pair: tuple[bytes, bytes] | None = None
+        while heap:
+            neg_count, rev = heapq.heappop(heap)
+            if pair_counts.get(rev.pair, 0) == -neg_count:
+                best_pair = rev.pair
+                break
+
+        if best_pair is None:
             break
 
         merges.append(best_pair)
-        merged_token = best_pair[0] + best_pair[1]
-        vocab[next_id] = merged_token
-
+        vocab[next_id] = best_pair[0] + best_pair[1]
         next_id += 1
+        if len(merges) % 500 == 0:
+            print(f"  [2/2] 合并进度 {len(merges)}/{total_merges}", flush=True)
 
-        affected_word_ids = list(pair_to_word_ids.get(best_pair, ()))
+        affected_word_ids = list(pair_to_word_ids.pop(best_pair, ()))
+        pair_counts.pop(best_pair, None)
+
         for word_id in affected_word_ids:
             old_symbols = words[word_id]
             word_freq_count = freqs[word_id]
 
-            old_pairs = _pair_occurrences(old_symbols)
-            for pair, occurrences in old_pairs.items():
-                new_count = pair_counts[pair] - occurrences * word_freq_count
-                if new_count:
+            for pair, occurrences in _pair_occurrences(old_symbols).items():
+                new_count = pair_counts.get(pair, 0) - occurrences * word_freq_count
+                if new_count > 0:
                     pair_counts[pair] = new_count
+                    heapq.heappush(heap, (-new_count, _RevPair(pair)))
                 else:
                     pair_counts.pop(pair, None)
                 word_ids = pair_to_word_ids.get(pair)
@@ -160,12 +245,11 @@ def train_bpe(
             new_symbols = _merge_pair_in_symbols(old_symbols, best_pair)
             words[word_id] = new_symbols
 
-            new_pairs = _pair_occurrences(new_symbols)
-            for pair, occurrences in new_pairs.items():
-                pair_counts[pair] = (
-                    pair_counts.get(pair, 0) + occurrences * word_freq_count
-                )
+            for pair, occurrences in _pair_occurrences(new_symbols).items():
+                new_count = pair_counts.get(pair, 0) + occurrences * word_freq_count
+                pair_counts[pair] = new_count
                 pair_to_word_ids[pair].add(word_id)
+                heapq.heappush(heap, (-new_count, _RevPair(pair)))
 
     return vocab, merges
 
