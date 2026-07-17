@@ -297,23 +297,46 @@ class BPETokenizer:
         merges_filepath: str | Path,
         special_tokens: list[str] | None = None,
     ) -> "BPETokenizer":
+        """从磁盘加载 vocab/merges。
+
+        merges.txt 用空格/换行作分隔符，而 token 本身可能就是空格或换行，
+        直接按空格 split 会解析错误。这里利用 vocab id 按 “special tokens →
+        256 单字节 → 各 merge 结果” 顺序递增、且每个 merge 结果长度已知这一点，
+        精确切分出每条 merge。
+        """
         with open(vocab_filepath, encoding="utf-8") as f:
             raw_vocab = json.load(f)
-
         vocab: dict[int, bytes] = {}
         for key, value in raw_vocab.items():
             vocab[int(key)] = (
                 value.encode("latin1") if isinstance(value, str) else bytes(value)
             )
+        values = set(vocab.values())
+
+        num_special = len(_sorted_special_tokens(special_tokens))
+        base = num_special + 256
+        n_merges = len(vocab) - base
+        merged_seq = [vocab[base + i] for i in range(n_merges)]
+
+        # 还原写入时的原始字节流（写入是 latin1->str->utf-8 文本模式）
+        with open(merges_filepath, encoding="utf-8") as f:
+            data = f.read().encode("latin1")
 
         merges: list[tuple[bytes, bytes]] = []
-        with open(merges_filepath, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                left, right = line.split(" ")
-                merges.append((left.encode("latin1"), right.encode("latin1")))
+        pos = 0
+        for i, merged in enumerate(merged_seq):
+            entry = data[pos : pos + len(merged) + 1]
+            found = None
+            for p in range(len(entry)):
+                if entry[p : p + 1] == b" ":
+                    left, right = entry[:p], entry[p + 1 :]
+                    if left + right == merged and left in values and right in values:
+                        found = (left, right)
+                        break
+            if found is None:
+                raise ValueError(f"无法解析第 {i} 条 merge: {entry!r} -> {merged!r}")
+            merges.append(found)
+            pos += len(merged) + 1 + 1  # entry + 换行分隔符
 
         return cls(vocab=vocab, merges=merges, special_tokens=special_tokens)
 

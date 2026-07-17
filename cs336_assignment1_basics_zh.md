@@ -413,20 +413,21 @@ BPE 分词器的训练过程由三个主要步骤组成。
 >
 > **(a)** 从 TinyStories 和 OpenWebText 各采样 10 个文档。使用你之前训练的 TinyStories 和 OpenWebText 分词器（分别为 10K 和 32K 词汇表大小），将这些采样的文档编码为整数 ID。每个分词器的压缩比（字节/token）是多少？
 >
-> **交付物**：一到两句话回答。
+> **交付物**：/u01/lvliping/src/assignment1-basics/data/TinyStoriesV2-GPT4-valid.txt: 文档数 20，总字节 18259，总 token 4481，压缩比 4.07 bytes/token
+> /u01/lvliping/src/assignment1-basics/data/owt_valid.txt: 文档数 20，总字节 91351，总 token 19970，压缩比 4.57 bytes/token
 >
 > **(b)** 如果你用 TinyStories 分词器分词 OpenWebText 样本会发生什么？比较压缩比和/或定性地描述会发生什么。
 >
-> **交付物**：一到两句话回答。
+> **交付物** 压缩比会下降，变成3.3
 >
 > **(c)** 估计你的分词器的吞吐量（如字节/秒）。分词 Pile 数据集（825GB 文本）需要多长时间？
 >
-> **交付物**：一到两句话回答。
+> **交付物**：吞吐量 ≈ 3.9 MB/s(由 290MB / 74.4s 实测得到)
+分词 Pile(825GB) ≈ 825 GB ÷ 3.9 MB/s ≈ 2.3×10⁵ 秒 ≈ 63 小时 ≈ 2.6 天(单进程纯 Python)
 >
 > **(d)** 使用你的 TinyStories 和 OpenWebText 分词器，将各自的训练集和开发集编码为整数 token ID 序列。我们稍后会用它来训练语言模型。我们建议将 token ID 序列化为数据类型为 `uint16` 的 NumPy 数组。为什么 `uint16` 是一个合适的选择？
 >
-> **交付物**：一到两句话回答。
-
+> **交付物**：因为uint16可以装得下32k的词表
 ---
 
 ## 3 Transformer 语言模型架构
