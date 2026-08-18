@@ -7,8 +7,9 @@ from typing import IO, Any, BinaryIO
 import numpy.typing as npt
 import torch
 from jaxtyping import Bool, Float, Int
-from torch import Tensor
-from cs336_basics.nn import softmax, cross_entropy, silu
+from torch import Tensor, embedding
+from cs336_basics.nn import softmax, cross_entropy, silu, gradient_clipping
+from cs336_basics.model import Linear, Embedding, RMSNorm, SwiGlu
 from cs336_basics.bpe import train_bpe, BPETokenizer
 
 
@@ -31,7 +32,9 @@ def run_linear(
         Float[Tensor, "... d_out"]: The transformed output of your linear module.
     """
 
-    raise NotImplementedError
+    layer = Linear(d_in, d_out, device=weights.device, dtype=weights.dtype)
+    layer.load_state_dict({"weight": weights})
+    return layer(in_features)
 
 
 def run_embedding(
@@ -52,8 +55,12 @@ def run_embedding(
     Returns:
         Float[Tensor, "... d_model"]: Batch of embeddings returned by your Embedding layer.
     """
-
-    raise NotImplementedError
+    embedding = Embedding(
+        vocab_size,
+        d_model,
+    )
+    embedding.load_state_dict({"weight": weights})
+    return embedding(token_ids)
 
 
 def run_swiglu(
@@ -85,7 +92,12 @@ def run_swiglu(
     # swiglu.w1.weight.data = w1_weight
     # swiglu.w2.weight.data = w2_weight
     # swiglu.w3.weight.data = w3_weight
-    raise NotImplementedError
+
+    swiglu = SwiGlu(d_model, d_ff, device=w1_weight.device, dtype=w1_weight.dtype)
+    swiglu.load_state_dict(
+        {"w1.weight": w1_weight, "w2.weight": w2_weight, "w3.weight": w3_weight}
+    )
+    return swiglu(in_features)
 
 
 def run_scaled_dot_product_attention(
@@ -380,7 +392,9 @@ def run_rmsnorm(
         Float[Tensor,"... d_model"]: Tensor of with the same shape as `in_features` with the output of running
         RMSNorm of the `in_features`.
     """
-    raise NotImplementedError
+    rms = RMSNorm(d_model, eps)
+    rms.load_state_dict({"weight": weights})
+    return rms(in_features)
 
 
 def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
@@ -465,7 +479,7 @@ def run_gradient_clipping(
 
     The gradients of the parameters (parameter.grad) should be modified in-place.
     """
-    raise NotImplementedError
+    return gradient_clipping(parameters, max_l2_norm)
 
 
 def get_adamw_cls() -> Any:

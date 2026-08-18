@@ -4,6 +4,8 @@ Put stateless helper functions here (softmax, silu, rmsnorm, cross_entropy, ...)
 nn.Module subclasses that carry parameters belong in model.py instead.
 """
 
+from math import sqrt
+
 import torch
 from torch import Tensor, tensor
 
@@ -16,8 +18,11 @@ def softmax(x, dim) -> Tensor:
 
 
 def cross_entropy(logits: Tensor, targets: Tensor) -> Tensor:
-
-    z_t = logits.gather(dim=-1, index=targets.unsqueeze(-1)).squeeze(-1)  # (batch,)
+    # 两种写法，取出targets对应的logits的值
+    # z_t = logits[torch.arange(logits.shape[0]), targets]
+    z_t = logits.gather(dim=-1, index=targets.unsqueeze(-1)).squeeze(
+        -1
+    )  # (batch,)，把targets变成二维，然后取出的数变成一维
     # sum = torch.logsumexp(logits, dim=-1)  # (batch,) + (batch,) → (batch,)
 
     m = logits.max(dim=-1, keepdim=True).values  # (batch, 1)
@@ -33,3 +38,14 @@ def cross_entropy(logits: Tensor, targets: Tensor) -> Tensor:
 def silu(x: Tensor) -> Tensor:
     x = x / (1 + torch.exp(-x))
     return x
+
+
+def gradient_clipping(parameters, max_l2_norm: float) -> None:
+    grads = [p.grad for p in parameters if p.grad is not None]
+    total_sum = torch.sqrt(sum(torch.sum(grad * grad) for grad in grads))
+    if total_sum > max_l2_norm:
+        clip = max_l2_norm / total_sum
+        for grad in grads:
+            grad.mul_(clip)
+
+    return None
