@@ -24,6 +24,7 @@ from cs336_basics.model import (
     myRotaryPositionalEmbedding,
     MultiHeadSelfAttention,
     TransformerBlock,
+    TransformerLM,
 )
 from cs336_basics.bpe import train_bpe, BPETokenizer
 
@@ -178,7 +179,7 @@ def run_multihead_self_attention(
             "q_proj.weight": q_proj_weight,
             "k_proj.weight": k_proj_weight,
             "v_proj.weight": v_proj_weight,
-            "o_proj.weight": o_proj_weight,
+            "output_proj.weight": o_proj_weight,
         }
     )
     return layer(in_features)
@@ -234,7 +235,7 @@ def run_multihead_self_attention_with_rope(
             "q_proj.weight": q_proj_weight,
             "k_proj.weight": k_proj_weight,
             "v_proj.weight": v_proj_weight,
-            "o_proj.weight": o_proj_weight,
+            "output_proj.weight": o_proj_weight,
         }
     )
     return layer(in_features, token_positions=token_positions)
@@ -338,19 +339,7 @@ def run_transformer_block(
         running the Transformer block on the input features while using RoPE.
     """
     block = TransformerBlock(d_model, num_heads, d_ff, max_seq_len, theta)
-    block.load_state_dict(
-        {
-            "attn.q_proj.weight": weights["attn.q_proj.weight"],
-            "attn.k_proj.weight": weights["attn.k_proj.weight"],
-            "attn.v_proj.weight": weights["attn.v_proj.weight"],
-            "attn.o_proj.weight": weights["attn.output_proj.weight"],
-            "ln1.weight": weights["ln1.weight"],
-            "ln2.weight": weights["ln2.weight"],
-            "ffn.w1.weight": weights["ffn.w1.weight"],
-            "ffn.w2.weight": weights["ffn.w2.weight"],
-            "ffn.w3.weight": weights["ffn.w3.weight"],
-        }
-    )
+    block.load_state_dict(weights)
     return block(in_features)
 
 
@@ -433,7 +422,12 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+    llm = TransformerLM(
+        vocab_size, context_length, d_model, num_layers, num_heads, d_ff, rope_theta
+    )
+    # 模块命名与参考权重 key 一一对应（含 o_proj→output_proj 已改名），直接整体加载
+    llm.load_state_dict(weights)
+    return llm(in_indices)
 
 
 def run_rmsnorm(

@@ -152,7 +152,7 @@ class MultiHeadSelfAttention(nn.Module):
         self.q_proj = Linear(d_model, d_model, device=device, dtype=dtype)
         self.k_proj = Linear(d_model, d_model, device=device, dtype=dtype)
         self.v_proj = Linear(d_model, d_model, device=device, dtype=dtype)
-        self.o_proj = Linear(d_model, d_model, device=device, dtype=dtype)
+        self.output_proj = Linear(d_model, d_model, device=device, dtype=dtype)
 
         # RoPE 作用在“每个头”的 d_head 维度上，所以这里用 d_head 而不是 d_model
         self.rope = (
@@ -196,7 +196,7 @@ class MultiHeadSelfAttention(nn.Module):
         out = rearrange(out, "... h seq d -> ... seq (h d)")
 
         # 6) 输出投影 W_O：混合各头信息，映射回 d_model
-        return self.o_proj(out)
+        return self.output_proj(out)
 
 
 class TransformerBlock(nn.Module):
@@ -217,3 +217,49 @@ class TransformerBlock(nn.Module):
         x_1 = x + self.attn(self.ln1(x))
         x_2 = x_1 + self.ffn(self.ln2(x_1))
         return x_2
+
+
+class TransformerLM(nn.Module):
+    """完整 Transformer 语言模型：embed → N × block → final norm → lm_head。
+
+    子模块命名与参考权重的 key 一一对应，可直接 load_state_dict：
+    token_embeddings / layers.{i} / ln_final / lm_head
+    """
+
+    def __init__(
+        self,
+        vocab_size: int,
+        context_length: int,
+        d_model: int,
+        num_layers: int,
+        num_heads: int,
+        d_ff: int,
+        rope_theta: float,
+        device=None,
+        dtype=None,
+    ) -> None:
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.context_length = context_length
+        self.d_model = d_model
+        self.num_layers = num_layers
+        self.num_heads = num_heads
+        self.d_ff = d_ff
+        self.rope_theta = rope_theta
+
+        self.token_embeddings = Embedding(
+            vocab_size, d_model, device=device, dtype=dtype
+        )
+        self.layers = nn.ModuleList(
+            TransformerBlock(d_model, num_heads, d_ff, context_length, rope_theta)
+            for _ in range(num_layers)
+        )
+        self.ln_final = RMSNorm(d_model, device=device, dtype=dtype)
+        self.lm_head = Linear(d_model, vocab_size, device=device, dtype=dtype)
+
+    def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
+        x = self.token_embeddings(token_ids)  # (batch, seq, d_model)
+        for layer in self.layers:
+            x = layer(x)  # N 个 Transformer block
+        x = self.ln_final(x)  # 最后一个 RMSNorm
+        return self.lm_head(x)  # (batch, seq, vocab_size) logits，不 softmax
