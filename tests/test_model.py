@@ -143,15 +143,15 @@ def test_transformer_lm(
     state_dict, _ = ts_state_dict
 
     actual_output = run_transformer_lm(
-        vocab_size=vocab_size,
-        context_length=n_keys,
-        d_model=d_model,
-        num_layers=n_layers,
-        num_heads=n_heads,
-        d_ff=d_ff,
-        rope_theta=theta,
+        vocab_size=vocab_size,  # 10000
+        context_length=n_keys,  # 16
+        d_model=d_model,  # 64
+        num_layers=n_layers,  # 3
+        num_heads=n_heads,  # 4
+        d_ff=d_ff,  # 123
+        rope_theta=theta,  # 10000
         weights=state_dict,
-        in_indices=in_indices,
+        in_indices=in_indices,  # [4,12]
     )
     numpy_snapshot.assert_match(actual_output, atol=1e-4, rtol=1e-2)
 
@@ -197,10 +197,10 @@ def test_transformer_block(
     }
 
     actual_output = run_transformer_block(
-        d_model=d_model,
-        num_heads=n_heads,
-        d_ff=d_ff,
-        max_seq_len=n_keys,
+        d_model=d_model,  # 64
+        num_heads=n_heads,  # 4
+        d_ff=d_ff,  # 128
+        max_seq_len=n_keys,  # 16
         theta=theta,
         weights=block_weights,
         in_features=in_embeddings,

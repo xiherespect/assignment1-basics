@@ -5,9 +5,10 @@ nn.Module subclasses that carry parameters belong in model.py instead.
 """
 
 from math import sqrt
-
 import torch
 from torch import Tensor, tensor
+from einops import einsum
+from jaxtyping import Bool, Float, Int
 
 
 def softmax(x, dim) -> Tensor:
@@ -49,3 +50,26 @@ def gradient_clipping(parameters, max_l2_norm: float) -> None:
             grad.mul_(clip)
 
     return None
+
+
+def scaled_dot_product_attention(
+    Q: Float[Tensor, " ... queries d_k"],
+    K: Float[Tensor, " ... keys d_k"],
+    V: Float[Tensor, " ... keys d_v"],
+    mask: Bool[Tensor, " ... queries keys"] | None = None,
+) -> Float[Tensor, " ... queries d_v"]:
+    s = einsum(
+        Q,
+        K,
+        "... queries d_k,... keys d_k->... queries keys",
+    )
+    s = s / sqrt(Q.shape[-1])
+    if mask is not None:
+        s = s.masked_fill(~mask, float("-inf"))
+    r = softmax(s, -1)
+    att = einsum(
+        r,
+        V,
+        "... queries keys,... keys d_v->... queries d_v",
+    )
+    return att
